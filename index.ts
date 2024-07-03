@@ -241,26 +241,32 @@ const download = async (slug: string) => {
       if (canvas) {
         const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r));
 
+        const y1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
+        const x1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
+
         document.documentElement.dispatchEvent(
           new MouseEvent("mousedown", {
             view: window,
             bubbles: true,
             cancelable: true,
-            clientX: 100,
-            clientY: 200,
+            clientX: y1,
+            clientY: x1,
             button: 0,
           })
         );
 
         await new Promise((r) => setTimeout(r, 100));
 
+        const y2 = Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
+        const x2 = Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
+
         document.documentElement.dispatchEvent(
           new MouseEvent("mouseup", {
             view: window,
             bubbles: true,
             cancelable: true,
-            clientX: 100,
-            clientY: 200,
+            clientX: y2,
+            clientY: x2,
             button: 0,
           })
         );
