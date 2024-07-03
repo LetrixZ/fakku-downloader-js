@@ -223,6 +223,38 @@ const download = async (slug: string) => {
     const path = `downloads/${slug}/${page}.png`;
 
     if (await Bun.file(path).exists()) {
+      await _page.evaluate(async () => {
+        const y1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
+        const x1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
+
+        document.documentElement.dispatchEvent(
+          new MouseEvent("mousedown", {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: y1,
+            clientY: x1,
+            button: 0,
+          })
+        );
+
+        await new Promise((r) => setTimeout(r, 100));
+
+        const y2 = Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
+        const x2 = Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
+
+        document.documentElement.dispatchEvent(
+          new MouseEvent("mouseup", {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: y2,
+            clientY: x2,
+            button: 0,
+          })
+        );
+      });
+
       continue;
     }
 
