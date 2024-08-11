@@ -6,6 +6,7 @@ import { RequestInterceptionManager } from "puppeteer-intercept-and-modify-reque
 import sharp from "sharp";
 import { parseArgs } from "util";
 import yaml from "yaml";
+import { random } from "./utils";
 
 puppeteer.use(stealthPlugin());
 
@@ -104,14 +105,11 @@ const browser = await puppeteer.launch({
     : process.env.USER_DATA_DIR ?? "./data",
   headless: values.headless ? values.headless === "true" : true,
 });
-const tab = await browser.newPage();
-tab.setViewport({ width: 3840, height: 2160 });
 
+const tab = await browser.newPage();
 await tab.goto("https://www.fakku.net/login", { waitUntil: "networkidle0" });
 
-const loginButton = await tab.$("button[name='login']");
-
-if (loginButton) {
+if (await tab.$("button[name='login']")) {
   console.log('Login then press "Enter" to continue');
 
   for await (const _ of console) {
@@ -229,7 +227,9 @@ const done: Set<String> = await (async () => {
   }
 })();
 
-const download = async (slug: string) => {
+const downloadGallery = async (slug: string) => {
+  tab.setViewport(null);
+
   const url = `https://www.fakku.net/hentai/${slug}`;
 
   if (done.has(url)) {
@@ -240,23 +240,9 @@ const download = async (slug: string) => {
     waitUntil: "networkidle0",
   });
 
-  if (
-    !(await tab.$(
-      ".table-cell.w-full.align-top.text-left a[href='/unlimited']"
-    ))
-  ) {
-    done.add(url);
-    Bun.write("done.txt", Array.from(done).join("\n"));
-
-    return;
-  }
-
   const metadata = await getMetadata(slug);
 
-  await Promise.all([
-    tab.waitForNavigation(),
-    tab.click("a[title='Start Reading']"),
-  ]);
+  await tab.setViewport({ width: 3840, height: 2160 });
 
   const client = await tab.createCDPSession();
 
@@ -267,7 +253,7 @@ const download = async (slug: string) => {
     const timeout = setTimeout(reject, 10000);
 
     await interceptManager.intercept({
-      urlPattern: `https://reader.fakku.net/hentai/${slug}/read`,
+      urlPattern: `*/read`,
       resourceType: "XHR",
       modifyResponse({ body }) {
         if (body) {
@@ -279,9 +265,10 @@ const download = async (slug: string) => {
       },
     });
 
-    await tab.goto(`https://www.fakku.net/hentai/${slug}/read`, {
-      waitUntil: "networkidle2",
-    });
+    await Promise.all([
+      tab.waitForNavigation(),
+      tab.click("a[title='Start Reading']"),
+    ]);
   });
 
   const pages: { page: number; url: string }[] = [];
@@ -290,109 +277,137 @@ const download = async (slug: string) => {
     const path = `${downloadDir}/${slug}/${page}.png`;
 
     if (await Bun.file(path).exists()) {
-      await tab.evaluate(async () => {
-        const y1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
-        const x1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
+      await new Promise<void>((r) =>
+        setTimeout(
+          () =>
+            tab
+              .evaluate(async () => {
+                const random = (min: number, max: number) => {
+                  min = Math.ceil(min);
+                  max = Math.floor(max);
 
-        document.documentElement.dispatchEvent(
-          new MouseEvent("mousedown", {
-            view: window,
-            bubbles: true,
-            cancelable: true,
-            clientX: y1,
-            clientY: x1,
-            button: 0,
-          })
-        );
+                  return Math.floor(Math.random() * (max - min + 1)) + min;
+                };
 
-        await new Promise((r) => setTimeout(r, 100));
+                const y1 = random(10, 400);
+                const x1 = random(10, 400);
 
-        const y2 =
-          Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
-        const x2 =
-          Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
+                document.documentElement.dispatchEvent(
+                  new MouseEvent("mousedown", {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: y1,
+                    clientY: x1,
+                    button: 0,
+                  })
+                );
 
-        document.documentElement.dispatchEvent(
-          new MouseEvent("mouseup", {
-            view: window,
-            bubbles: true,
-            cancelable: true,
-            clientX: y2,
-            clientY: x2,
-            button: 0,
-          })
-        );
-      });
+                await new Promise((r) => setTimeout(r, random(150, 300)));
+
+                const y2 = random(y1 - 5, y1 + 5);
+                const x2 = random(x1 - 5, x1 + 5);
+
+                document.documentElement.dispatchEvent(
+                  new MouseEvent("mouseup", {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: y2,
+                    clientY: x2,
+                    button: 0,
+                  })
+                );
+              })
+              .then(r),
+          random(150, 500)
+        )
+      );
 
       continue;
     }
 
     console.log(`(${slug}) Getting page ${page}`);
 
-    const url = await tab.evaluate(async () => {
-      await new Promise((r) => setTimeout(r, 100));
-
+    const dataUrl = await tab.evaluate(async (page) => {
       let canvas: HTMLCanvasElement | null = document.querySelector(
         "[data-name='PageView'] > canvas"
       );
 
-      while (!canvas) {
-        await new Promise((r) => setTimeout(r, 100));
+      while (!canvas || canvas?.getAttribute("page")) {
+        await new Promise((r) => setTimeout(r, 250));
         canvas = document.querySelector("[data-name='PageView'] > canvas");
       }
 
-      if (canvas) {
-        const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r));
+      canvas.setAttribute("page", page.toString());
 
-        const y1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
-        const x1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
+      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r));
 
-        document.documentElement.dispatchEvent(
-          new MouseEvent("mousedown", {
-            view: window,
-            bubbles: true,
-            cancelable: true,
-            clientX: y1,
-            clientY: x1,
-            button: 0,
-          })
-        );
-
-        await new Promise((r) => setTimeout(r, 100));
-
-        const y2 =
-          Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
-        const x2 =
-          Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
-
-        document.documentElement.dispatchEvent(
-          new MouseEvent("mouseup", {
-            view: window,
-            bubbles: true,
-            cancelable: true,
-            clientX: y2,
-            clientY: x2,
-            button: 0,
-          })
-        );
-
-        if (blob) {
-          return new Promise<string>((r) => {
-            const reader = new FileReader();
-            reader.onload = () => r(reader.result as string);
-            reader.readAsDataURL(blob);
-          });
-        }
+      if (!blob) {
+        throw new Error(`Failed to convert canvas to blob for page ${page}`);
       }
-    });
 
-    if (url) {
-      pages.push({ page, url });
-      const res = await fetch(url);
-      const buffer = await res.arrayBuffer();
-      const img = await sharp(buffer).removeAlpha().png().toBuffer();
-      Bun.write(path, img);
-    }
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+    }, page);
+
+    pages.push({ page, url: dataUrl });
+
+    const res = await fetch(dataUrl);
+    const buffer = await res.arrayBuffer();
+    const img = await sharp(buffer).removeAlpha().png().toBuffer();
+
+    await Bun.write(path, img);
+
+    await new Promise<void>((r) =>
+      setTimeout(
+        () =>
+          tab
+            .evaluate(async () => {
+              const random = (min: number, max: number) => {
+                min = Math.ceil(min);
+                max = Math.floor(max);
+
+                return Math.floor(Math.random() * (max - min + 1)) + min;
+              };
+
+              const y1 = random(10, 400);
+              const x1 = random(10, 400);
+
+              document.documentElement.dispatchEvent(
+                new MouseEvent("mousedown", {
+                  view: window,
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: y1,
+                  clientY: x1,
+                  button: 0,
+                })
+              );
+
+              await new Promise((r) => setTimeout(r, random(150, 300)));
+
+              const y2 = random(y1 - 5, y1 + 5);
+              const x2 = random(x1 - 5, x1 + 5);
+
+              document.documentElement.dispatchEvent(
+                new MouseEvent("mouseup", {
+                  view: window,
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: y2,
+                  clientY: x2,
+                  button: 0,
+                })
+              );
+            })
+            .then(r),
+        random(500, 1250)
+      )
+    );
   }
 
   if (pageData.spreads.length && values.spreads) {
@@ -421,21 +436,22 @@ const download = async (slug: string) => {
           .removeAlpha()
           .png()
           .toBuffer();
-        Bun.write(path, img);
+
+        await Bun.write(path, img);
       }
     }
   }
 
-  Bun.write(`${downloadDir}/${slug}/info.yaml`, yaml.stringify(metadata));
+  await Bun.write(`${downloadDir}/${slug}/info.yaml`, yaml.stringify(metadata));
 
   done.add(`https://www.fakku.net/hentai/${slug}`);
-  Bun.write("done.txt", Array.from(done).join("\n"));
+  await Bun.write("done.txt", Array.from(done).join("\n"));
 
   console.log(`(${slug}) Finished`);
 };
 
 for (const slug of slugs) {
-  await download(slug).catch((error) => {
+  await downloadGallery(slug).catch((error) => {
     console.error(`Failed to download gallery '${slug}'`, error);
   });
 }
