@@ -1,12 +1,11 @@
 import joinImages from "join-images";
-import type { CookieParam } from "puppeteer";
+import { parse } from "node-html-parser";
 import puppeteer from "puppeteer-extra";
 import stealthPlugin from "puppeteer-extra-plugin-stealth";
 import { RequestInterceptionManager } from "puppeteer-intercept-and-modify-requests";
 import sharp from "sharp";
 import { parseArgs } from "util";
 import yaml from "yaml";
-import { parse } from "node-html-parser";
 
 puppeteer.use(stealthPlugin());
 
@@ -77,7 +76,6 @@ const browser = await puppeteer.launch({
   headless: values.headless === "true",
 });
 const page = await browser.newPage();
-const client = await page.createCDPSession();
 
 await page.goto("https://www.fakku.net/login", { waitUntil: "networkidle0" });
 
@@ -92,23 +90,12 @@ if (el) {
 
 await page.goto("https://www.fakku.net/", { waitUntil: "networkidle0" });
 
-const { cookies } = await client.send("Network.getAllCookies");
-
 const getMetadata = async (slug: string): Promise<Metadata> => {
   console.log(`(${slug}) Getting metadata`);
 
-  const res = await fetch(`https://www.fakku.net/hentai/${slug}`, {
-    headers: {
-      cookie: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; "),
-    },
-  });
+  await page.goto(`https://www.fakku.net/hentai/${slug}`, { waitUntil: "networkidle0" });
 
-  if (!res.ok) {
-    throw new Error(`Failed to get metadata at https://www.fakku.net/hentai/${slug}`);
-  }
-
-  const html = await res.text();
-
+  const html = await page.evaluate(() => document.querySelector("*")!.outerHTML);
   const root = parse(html);
   const infoDivs = Array.from(root.querySelectorAll(".table.text-sm.w-full"));
 
