@@ -38,33 +38,60 @@ const { values, positionals } = parseArgs({
   options: {
     spreads: {
       type: "boolean",
+      short: "s",
     },
     headless: {
       type: "string",
       default: "true",
+      short: "h",
     },
     "user-data-dir": {
       type: "string",
-      default: "./data",
+      short: "u",
+    },
+    "download-dir": {
+      type: "string",
+      default: "./downloads",
+      short: "d",
+    },
+    file: {
+      type: "string",
+      short: "f",
     },
   },
   strict: true,
   allowPositionals: true,
 });
 
-const urls = positionals.slice(2);
+const downloadDir = values["download-dir"]
+  ? values["download-dir"]
+  : process.env.DOWNLOAD_DIR ?? "./downloads";
 
-if (!urls.length) {
-  throw new Error("No URLs given");
-}
+const urls = await (async () => {
+  if (values.file) {
+    const text = await Bun.file(values.file).text();
+    return text
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length);
+  } else {
+    const urls = positionals.slice(2);
+
+    if (!urls.length) {
+      throw new Error("No URLs given");
+    }
+
+    return urls;
+  }
+})();
 
 const slugs = [];
 
-for (const url of urls) {
+for (const [i, url] of urls.entries()) {
   const match = url.match(/(?<=fakku\.net\/hentai\/)[^\/]+/)?.[0];
 
   if (!match) {
-    throw new Error("Invalid FAKKU URL");
+    throw new Error(`Invalid FAKKU URL (${i}) '${url}`);
   }
 
   slugs.push(match);
@@ -72,30 +99,32 @@ for (const url of urls) {
 
 const browser = await puppeteer.launch({
   args: ["--disable-web-security"],
-  userDataDir: values["user-data-dir"],
-  headless: values.headless === "true",
+  userDataDir: values["user-data-dir"]
+    ? values["user-data-dir"]
+    : process.env.USER_DATA_DIR ?? "./data",
+  headless: values.headless ? values.headless === "true" : true,
 });
-const page = await browser.newPage();
+const tab = await browser.newPage();
+tab.setViewport({ width: 3840, height: 2160 });
 
-await page.goto("https://www.fakku.net/login", { waitUntil: "networkidle0" });
+await tab.goto("https://www.fakku.net/login", { waitUntil: "networkidle0" });
 
-const el = await page.$("button[name='login'");
+const loginButton = await tab.$("button[name='login']");
 
-if (el) {
+if (loginButton) {
   console.log('Login then press "Enter" to continue');
+
   for await (const _ of console) {
     break;
   }
 }
 
-await page.goto("https://www.fakku.net/", { waitUntil: "networkidle0" });
+await tab.goto("https://www.fakku.net/", { waitUntil: "networkidle0" });
 
 const getMetadata = async (slug: string): Promise<Metadata> => {
   console.log(`(${slug}) Getting metadata`);
 
-  await page.goto(`https://www.fakku.net/hentai/${slug}`, { waitUntil: "networkidle0" });
-
-  const html = await page.evaluate(() => document.querySelector("*")!.outerHTML);
+  const html = await tab.evaluate(() => document.querySelector("*")!.outerHTML);
   const root = parse(html);
   const infoDivs = Array.from(root.querySelectorAll(".table.text-sm.w-full"));
 
@@ -168,32 +197,77 @@ const getMetadata = async (slug: string): Promise<Metadata> => {
     metadata.Event = events;
   }
 
-  const pagesMatch = infoDivs.find((div) => div.childNodes[1]?.textContent == "Pages")?.childNodes[3]?.textContent?.match(/\d+/)?.[0];
+  const pagesMatch = infoDivs
+    .find((div) => div.childNodes[1]?.textContent == "Pages")
+    ?.childNodes[3]?.textContent?.match(/\d+/)?.[0];
 
   if (pagesMatch) {
     metadata.Pages = parseInt(pagesMatch);
   }
 
-  const thumbnail = root.querySelector('img[src*="/thumbs/"]')!.getAttribute("src")!;
-  metadata.ThumbnailIndex = parseInt(thumbnail.split("/").at(-1)!.match(/\d+/)![0]!) - 1;
+  const thumbnail = root
+    .querySelector('img[src*="/thumbs/"]')!
+    .getAttribute("src")!;
+  metadata.ThumbnailIndex =
+    parseInt(thumbnail.split("/").at(-1)!.match(/\d+/)![0]!) - 1;
 
   return metadata;
 };
 
+const done: Set<String> = await (async () => {
+  try {
+    const text = await Bun.file("done.txt").text();
+
+    return new Set(
+      text
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length)
+    );
+  } catch (e) {
+    return new Set();
+  }
+})();
+
 const download = async (slug: string) => {
+  const url = `https://www.fakku.net/hentai/${slug}`;
+
+  if (done.has(url)) {
+    return;
+  }
+
+  await tab.goto(url, {
+    waitUntil: "networkidle0",
+  });
+
+  if (
+    !(await tab.$(
+      ".table-cell.w-full.align-top.text-left a[href='/unlimited']"
+    ))
+  ) {
+    done.add(url);
+    Bun.write("done.txt", Array.from(done).join("\n"));
+
+    return;
+  }
+
   const metadata = await getMetadata(slug);
 
-  const _page = await browser.newPage();
-  await _page.setViewport({ width: 3840, height: 2160 });
-  const client = await _page.createCDPSession();
+  await Promise.all([
+    tab.waitForNavigation(),
+    tab.click("a[title='Start Reading']"),
+  ]);
+
+  const client = await tab.createCDPSession();
+
   // @ts-ignore
   const interceptManager = new RequestInterceptionManager(client);
 
   const pageData = await new Promise<PageData>(async (resolve, reject) => {
-    const timeout = setTimeout(reject, 30000);
+    const timeout = setTimeout(reject, 10000);
 
     await interceptManager.intercept({
-      urlPattern: "*/read",
+      urlPattern: `https://reader.fakku.net/hentai/${slug}/read`,
       resourceType: "XHR",
       modifyResponse({ body }) {
         if (body) {
@@ -205,16 +279,18 @@ const download = async (slug: string) => {
       },
     });
 
-    await _page.goto(`https://www.fakku.net/hentai/${slug}/read/page/1`);
+    await tab.goto(`https://www.fakku.net/hentai/${slug}/read`, {
+      waitUntil: "networkidle2",
+    });
   });
 
   const pages: { page: number; url: string }[] = [];
 
   for (const [_, { page }] of Object.entries(pageData.pages)) {
-    const path = `downloads/${slug}/${page}.png`;
+    const path = `${downloadDir}/${slug}/${page}.png`;
 
     if (await Bun.file(path).exists()) {
-      await _page.evaluate(async () => {
+      await tab.evaluate(async () => {
         const y1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
         const x1 = Math.floor(Math.random() * (400 - 10 + 1)) + 10;
 
@@ -231,8 +307,10 @@ const download = async (slug: string) => {
 
         await new Promise((r) => setTimeout(r, 100));
 
-        const y2 = Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
-        const x2 = Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
+        const y2 =
+          Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
+        const x2 =
+          Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
 
         document.documentElement.dispatchEvent(
           new MouseEvent("mouseup", {
@@ -251,10 +329,12 @@ const download = async (slug: string) => {
 
     console.log(`(${slug}) Getting page ${page}`);
 
-    const url = await _page.evaluate(async () => {
+    const url = await tab.evaluate(async () => {
       await new Promise((r) => setTimeout(r, 100));
 
-      let canvas: HTMLCanvasElement | null = document.querySelector("[data-name='PageView'] > canvas");
+      let canvas: HTMLCanvasElement | null = document.querySelector(
+        "[data-name='PageView'] > canvas"
+      );
 
       while (!canvas) {
         await new Promise((r) => setTimeout(r, 100));
@@ -280,8 +360,10 @@ const download = async (slug: string) => {
 
         await new Promise((r) => setTimeout(r, 100));
 
-        const y2 = Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
-        const x2 = Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
+        const y2 =
+          Math.floor(Math.random() * (y1 + 5 - (y1 - 5) + 1)) + (y1 - 5);
+        const x2 =
+          Math.floor(Math.random() * (x1 + 5 - (x1 - 5) + 1)) + (x1 - 5);
 
         document.documentElement.dispatchEvent(
           new MouseEvent("mouseup", {
@@ -318,24 +400,36 @@ const download = async (slug: string) => {
 
     for (const [a, b] of pageData.spreads) {
       if (b > a) {
-        const path = `downloads/${slug}/${a}_${b}.png`;
+        const path = `${downloadDir}/${slug}/${a}_${b}.png`;
 
         if (await Bun.file(path).exists()) {
           continue;
         }
 
-        const bufferA = await Bun.file(`downloads/${slug}/${a}.png`).arrayBuffer();
-        const bufferB = await Bun.file(`downloads/${slug}/${b}.png`).arrayBuffer();
+        const bufferA = await Bun.file(
+          `${downloadDir}/${slug}/${a}.png`
+        ).arrayBuffer();
+        const bufferB = await Bun.file(
+          `${downloadDir}/${slug}/${b}.png`
+        ).arrayBuffer();
 
-        const img = await (await joinImages([Buffer.from(bufferA), Buffer.from(bufferB)], { direction: "horizontal" })).removeAlpha().png().toBuffer();
+        const img = await (
+          await joinImages([Buffer.from(bufferA), Buffer.from(bufferB)], {
+            direction: "horizontal",
+          })
+        )
+          .removeAlpha()
+          .png()
+          .toBuffer();
         Bun.write(path, img);
       }
     }
   }
 
-  _page.close();
+  Bun.write(`${downloadDir}/${slug}/info.yaml`, yaml.stringify(metadata));
 
-  Bun.write(`downloads/${slug}/info.yaml`, yaml.stringify(metadata));
+  done.add(`https://www.fakku.net/hentai/${slug}`);
+  Bun.write("done.txt", Array.from(done).join("\n"));
 
   console.log(`(${slug}) Finished`);
 };
