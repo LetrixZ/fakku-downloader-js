@@ -71,8 +71,6 @@ for (const url of urls) {
   slugs.push(match);
 }
 
-const cookies: CookieParam[] = await Bun.file("cookies.json").json();
-
 const browser = await puppeteer.launch({
   args: ["--disable-web-security"],
   userDataDir: values["user-data-dir"],
@@ -81,15 +79,20 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 const client = await page.createCDPSession();
 
-page.setCookie(...cookies);
-
 await page.goto("https://www.fakku.net/login", { waitUntil: "networkidle0" });
+
+const el = await page.$("button[name='login'");
+
+if (el) {
+  console.log('Login then press "Enter" to continue');
+  for await (const _ of console) {
+    break;
+  }
+}
+
 await page.goto("https://www.fakku.net/", { waitUntil: "networkidle0" });
 
-(async () => {
-  const { cookies } = await client.send("Network.getAllCookies");
-  Bun.write("cookies.json", JSON.stringify(cookies));
-})();
+const { cookies } = await client.send("Network.getAllCookies");
 
 const getMetadata = async (slug: string): Promise<Metadata> => {
   console.log(`(${slug}) Getting metadata`);
