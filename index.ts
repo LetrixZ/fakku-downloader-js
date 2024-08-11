@@ -184,6 +184,7 @@ const download = async (slug: string) => {
   const metadata = await getMetadata(slug);
 
   const _page = await browser.newPage();
+  await _page.setViewport({ width: 3840, height: 2160 });
   const client = await _page.createCDPSession();
   // @ts-ignore
   const interceptManager = new RequestInterceptionManager(client);
