@@ -435,7 +435,9 @@ const download = async (slug: string) => {
 };
 
 for (const slug of slugs) {
-  await download(slug);
+  await download(slug).catch((error) => {
+    console.error(`Failed to download gallery '${slug}'`, error);
+  });
 }
 
 browser.close();
