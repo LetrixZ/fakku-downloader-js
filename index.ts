@@ -6,7 +6,7 @@ import { RequestInterceptionManager } from "puppeteer-intercept-and-modify-reque
 import sharp from "sharp";
 import { parseArgs } from "util";
 import yaml from "yaml";
-import { random } from "./utils";
+import { isUnlimited, random } from "./utils";
 
 puppeteer.use(stealthPlugin());
 
@@ -52,7 +52,6 @@ const { values, positionals } = parseArgs({
     },
     "download-dir": {
       type: "string",
-      default: "./downloads",
       short: "d",
     },
     file: {
@@ -131,7 +130,7 @@ const getMetadata = async (slug: string): Promise<Metadata> => {
   };
 
   const artists = infoDivs
-    .find((div) => div.childNodes[1]?.textContent == "Events")
+    .find((div) => div.childNodes[1]?.textContent == "Artist")
     ?.querySelectorAll("a")
     .map((a) => a.textContent.trim());
 
@@ -227,18 +226,40 @@ const done: Set<String> = await (async () => {
   }
 })();
 
+const notUnlimited: Set<String> = await (async () => {
+  try {
+    const text = await Bun.file("not_unlimited.txt").text();
+
+    return new Set(
+      text
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length)
+    );
+  } catch (e) {
+    return new Set();
+  }
+})();
+
 const downloadGallery = async (slug: string) => {
   tab.setViewport(null);
 
   const url = `https://www.fakku.net/hentai/${slug}`;
 
-  if (done.has(url)) {
+  if (done.has(url) || notUnlimited.has(url)) {
     return;
   }
 
   await tab.goto(url, {
     waitUntil: "networkidle0",
   });
+
+  if (!isUnlimited(tab) || !(await tab.$("a[title='Start Reading']"))) {
+    notUnlimited.add(url);
+    await Bun.write("not_unlimited.txt", Array.from(notUnlimited).join("\n"));
+
+    return;
+  }
 
   const metadata = await getMetadata(slug);
 
