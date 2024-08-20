@@ -54,6 +54,10 @@ const { values, positionals } = parseArgs({
       type: "string",
       short: "d",
     },
+    timeout: {
+      type: "string",
+      default: "20000",
+    },
     file: {
       type: "string",
       short: "f",
@@ -208,6 +212,8 @@ const getMetadata = async (slug: string): Promise<Metadata> => {
   metadata.ThumbnailIndex =
     parseInt(thumbnail.split("/").at(-1)!.match(/\d+/)![0]!) - 1;
 
+  console.debug("Obtained metadata", metadata);
+
   return metadata;
 };
 
@@ -250,6 +256,8 @@ const downloadGallery = async (slug: string) => {
     return;
   }
 
+  console.debug(`Navigating to gallery page: ${url}`);
+
   await tab.goto(url, {
     waitUntil: "networkidle0",
   });
@@ -270,8 +278,15 @@ const downloadGallery = async (slug: string) => {
   // @ts-ignore
   const interceptManager = new RequestInterceptionManager(client);
 
+  console.debug(
+    `Intercepting requests for page data with a timeout of ${values.timeout}ms`
+  );
+
   const pageData = await new Promise<PageData>(async (resolve, reject) => {
-    const timeout = setTimeout(reject, 10000);
+    const timeout = setTimeout(
+      () => reject(`Failed to get page data`),
+      parseInt(values.timeout!)
+    );
 
     await interceptManager.intercept({
       urlPattern: `*/read`,
@@ -286,18 +301,26 @@ const downloadGallery = async (slug: string) => {
       },
     });
 
+    console.debug("Clicking 'Start Reading' button");
+
     await Promise.all([
       tab.waitForNavigation(),
       tab.click("a[title='Start Reading']"),
     ]);
   });
 
+  console.debug("Intercepted page data body", pageData);
+
   const pages: { page: number; url: string }[] = [];
+
+  console.debug("Downloading pages");
 
   for (const [_, { page }] of Object.entries(pageData.pages)) {
     const path = `${downloadDir}/${slug}/${page}.png`;
 
     if (await Bun.file(path).exists()) {
+      console.debug(`Page ${page} already exists`);
+
       await new Promise<void>((r) =>
         setTimeout(
           () =>
@@ -380,6 +403,8 @@ const downloadGallery = async (slug: string) => {
     const res = await fetch(dataUrl);
     const buffer = await res.arrayBuffer();
     const img = await sharp(buffer).removeAlpha().png().toBuffer();
+
+    console.debug(`Saving page ${page} to ${path}`);
 
     await Bun.write(path, img);
 
