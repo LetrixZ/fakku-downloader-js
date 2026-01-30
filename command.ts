@@ -8,10 +8,10 @@ const { values, positionals } = parseArgs({
       type: "boolean",
       short: "s",
     },
-    headless: {
+    'no-headless': {
       short: "h",
       type: "boolean",
-      default: true,
+      default: false,
     },
     "user-data-dir": {
       type: "string",
@@ -93,7 +93,7 @@ const options: Options = {
   force: values.force,
   downloadDir,
   userDataDir,
-  headless: values.headless,
+  headless: values["no-headless"] === false,
   useJpegtran,
   timeout: parseInt(values.timeout!),
   spreads: values.spreads,
